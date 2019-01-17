@@ -1,6 +1,6 @@
 """Base classes for type definitions in the STIX2 library."""
 
-import collections
+from collections import Mapping, OrderedDict
 import copy
 import datetime as dt
 
@@ -13,58 +13,110 @@ from .exceptions import (
     MutuallyExclusivePropertiesError,
 )
 from .markings.utils import validate
-from .utils import NOW, find_property_index, format_datetime, get_timestamp
+from .utils import NOW, format_datetime, get_timestamp
 from .utils import new_version as _new_version
 from .utils import revoke as _revoke
 
-__all__ = ['STIXJSONEncoder', '_STIXBase']
+__all__ = ['_STIXBase']
 
 DEFAULT_ERROR = "{type} must have {property}='{expected}'."
 
+json_encoder = json.JSONEncoder()
 
-class STIXJSONEncoder(json.JSONEncoder):
-    """Custom JSONEncoder subclass for serializing Python ``stix2`` objects.
 
-    If an optional property with a default value specified in the STIX 2 spec
-    is set to that default value, it will be left out of the serialized output.
+def remove_optional_defaults(obj):
+    tmp_obj = dict(copy.deepcopy(obj))
+    for prop_name in obj._defaulted_optional_properties:
+        del tmp_obj[prop_name]
+    return tmp_obj
 
-    An example of this type of property include the ``revoked`` common property.
-    """
 
-    def default(self, obj):
-        if isinstance(obj, (dt.date, dt.datetime)):
-            return format_datetime(obj)
-        elif isinstance(obj, _STIXBase):
-            tmp_obj = dict(copy.deepcopy(obj))
-            for prop_name in obj._defaulted_optional_properties:
-                del tmp_obj[prop_name]
-            return tmp_obj
+def recursive_sort(obj, exclude_defaults=True):
+    if isinstance(obj, _STIXBase):
+        if exclude_defaults:
+            tmp_obj = remove_optional_defaults(obj)
         else:
-            return super(STIXJSONEncoder, self).default(obj)
+            tmp_obj = copy.deepcopy(obj)
+
+        property_list = obj.object_properties()
+        ret = OrderedDict(sorted(tmp_obj.items(), key=lambda el: property_list.index(el[0])))
+
+        for k, v in ret.items():
+            ret[k] = recursive_sort(v, exclude_defaults)
+        return ret
+    elif isinstance(obj, dict):
+        sorted_obj = sorted(obj.items())
+
+        ret = OrderedDict()
+        for k, v in sorted_obj:
+            ret[k] = recursive_sort(v, exclude_defaults)
+        return ret
+    elif isinstance(obj, list):
+        for k, v in enumerate(obj):
+            obj[k] = recursive_sort(v, exclude_defaults)
+
+    return obj
+
+# class STIXJSONEncoder(json.JSONEncoder):
+#     """Custom JSONEncoder subclass for serializing Python ``stix2`` objects.
+#
+#     If an optional property with a default value specified in the STIX 2 spec
+#     is set to that default value, it will be left out of the serialized output.
+#
+#     An example of this type of property include the ``revoked`` common property.
+#     """
 
 
-class STIXJSONIncludeOptionalDefaultsEncoder(json.JSONEncoder):
-    """Custom JSONEncoder subclass for serializing Python ``stix2`` objects.
+def json_encode(obj):
+    if isinstance(obj, (dt.date, dt.datetime)):
+        return format_datetime(obj)
+    elif isinstance(obj, _STIXBase):
+        return remove_optional_defaults(obj)
+    else:
+        return json_encoder.default(obj)
 
-    Differs from ``STIXJSONEncoder`` in that if an optional property with a default
-    value specified in the STIX 2 spec is set to that default value, it will be
-    included in the serialized output.
-    """
 
-    def default(self, obj):
-        if isinstance(obj, (dt.date, dt.datetime)):
-            return format_datetime(obj)
-        elif isinstance(obj, _STIXBase):
-            return dict(obj)
-        else:
-            return super(STIXJSONIncludeOptionalDefaultsEncoder, self).default(obj)
+def json_encode_pretty(obj):
+    print(str(type(obj)))
+    if isinstance(obj, (dt.date, dt.datetime)):
+        return format_datetime(obj)
+    elif isinstance(obj, (_STIXBase, dict)):
+        return recursive_sort(obj)
+    else:
+        return json_encoder.default(obj)
+
+
+# class STIXJSONIncludeOptionalDefaultsEncoder(json.JSONEncoder):
+#     """Custom JSONEncoder subclass for serializing Python ``stix2`` objects.
+#
+#     Differs from ``STIXJSONEncoder`` in that if an optional property with a default
+#     value specified in the STIX 2 spec is set to that default value, it will be
+#     included in the serialized output.
+#     """
+
+def json_encode_include_optional_defaults(obj):
+    if isinstance(obj, (dt.date, dt.datetime)):
+        return format_datetime(obj)
+    elif isinstance(obj, _STIXBase):
+        return dict(obj)
+    else:
+        return json_encoder.default(obj)
+
+
+def json_encode_pretty_include_optional_defaults(obj):
+    if isinstance(obj, (dt.date, dt.datetime)):
+        return format_datetime(obj)
+    elif isinstance(obj, (_STIXBase, dict)):
+        return recursive_sort(obj, exclude_defaults=False)
+    else:
+        return json_encoder.default(obj)
 
 
 def get_required_properties(properties):
     return (k for k, v in properties.items() if v.required)
 
 
-class _STIXBase(collections.Mapping):
+class _STIXBase(Mapping):
     """Base class for STIX object types"""
 
     def object_properties(self):
@@ -273,15 +325,17 @@ class _STIXBase(collections.Mapping):
             overridden: indent=4, separators=(",", ": "), item_sort_key=sort_by.
         """
         if pretty:
-            def sort_by(element):
-                return find_property_index(self, *element)
+            kwargs.update({'indent': 4, 'separators': (',', ': ')})
 
-            kwargs.update({'indent': 4, 'separators': (',', ': '), 'item_sort_key': sort_by})
-
-        if include_optional_defaults:
-            return json.dumps(self, cls=STIXJSONIncludeOptionalDefaultsEncoder, **kwargs)
+            if include_optional_defaults:
+                return json.dumps(self, default=json_encode_pretty_include_optional_defaults, **kwargs)
+            else:
+                return json.dumps(self, default=json_encode_pretty, **kwargs)
         else:
-            return json.dumps(self, cls=STIXJSONEncoder, **kwargs)
+            if include_optional_defaults:
+                return json.dumps(self, default=json_encode_include_optional_defaults, **kwargs)
+            else:
+                return json.dumps(self, default=json_encode, **kwargs)
 
 
 class _Observable(_STIXBase):

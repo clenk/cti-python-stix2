@@ -1,10 +1,10 @@
 import datetime as dt
-import json
 
 import pytest
 import pytz
+import simplejson as json
 
-from stix2.base import STIXJSONEncoder
+from stix2.base import json_encode
 
 
 def test_encode_json_datetime():
@@ -12,7 +12,7 @@ def test_encode_json_datetime():
     test_dict = {'now': now}
 
     expected = '{"now": "2017-03-22T00:00:00Z"}'
-    assert json.dumps(test_dict, cls=STIXJSONEncoder) == expected
+    assert json.dumps(test_dict, default=json_encode) == expected
 
 
 def test_encode_json_object():
@@ -20,6 +20,6 @@ def test_encode_json_object():
     test_dict = {'obj': obj}
 
     with pytest.raises(TypeError) as excinfo:
-        json.dumps(test_dict, cls=STIXJSONEncoder)
+        json.dumps(test_dict, default=json_encode)
 
     assert " is not JSON serializable" in str(excinfo.value)
